@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenLayers Map</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v9.2.4/ol.css" />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      font-family: Arial, sans-serif;
+    }
+
+    #map {
+      width: 100%;
+      height: 100%;
+      background: #f2f2f2;
+    }
+
+    .map-toolbar {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: rgba(255,255,255,0.96);
+      border-radius: 8px;
+      padding: 10px 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.18);
+      max-width: 240px;
+      font-size: 14px;
+      line-height: 1.35;
+    }
+
+    .map-toolbar h3 {
+      margin: 0 0 8px;
+      font-size: 14px;
+    }
+
+    .map-toolbar label {
+      display: block;
+      margin: 4px 0;
+      cursor: pointer;
+    }
+
+    .legend {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid #e5e5e5;
+      font-size: 12px;
+    }
+
+    .legend-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 3px 0;
+    }
+
+    .legend-swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 1px solid #666;
+      flex: 0 0 14px;
+    }
+
+    .ol-popup {
+      position: absolute;
+      background-color: white;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid #cccccc;
+      bottom: 12px;
+      left: -50px;
+      min-width: 260px;
+      max-width: 420px;
+      max-height: 320px;
+      overflow: auto;
+    }
+
+    .ol-popup:after,
+    .ol-popup:before {
+      top: 100%;
+      border: solid transparent;
+      content: " ";
+      height: 0;
+      width: 0;
+      position: absolute;
+      pointer-events: none;
+    }
+
+    .ol-popup:after {
+      border-top-color: white;
+      border-width: 10px;
+      left: 48px;
+      margin-left: -10px;
+    }
+
+    .ol-popup:before {
+      border-top-color: #cccccc;
+      border-width: 11px;
+      left: 48px;
+      margin-left: -11px;
+    }
+
+    .ol-popup-closer {
+      text-decoration: none;
+      position: absolute;
+      top: 8px;
+      right: 10px;
+      color: #666;
+      font-size: 18px;
+    }
+
+    .popup-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 6px;
+      font-size: 13px;
+    }
+
+    .popup-table th,
+    .popup-table td {
+      border-bottom: 1px solid #ececec;
+      text-align: left;
+      vertical-align: top;
+      padding: 6px 8px;
+      word-break: break-word;
+    }
+
+    .popup-table th {
+      width: 38%;
+      background: #fafafa;
+      font-weight: 600;
+    }
+
+    .popup-title {
+      margin: 0 20px 6px 0;
+      font-size: 15px;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div class="map-toolbar">
+    <h3>Layers</h3>
+    <label><input type="checkbox" id="toggleSites" checked> Situri limes</label>
+    <label><input type="checkbox" id="toggleVT19" checked> VT19</label>
+    <label><input type="checkbox" id="toggleBuffer100" checked> Buffer 100 m</label>
+    <label><input type="checkbox" id="toggleBuffer200" checked> Buffer 200 m</label>
+    <label><input type="checkbox" id="toggleBuffer500" checked> Buffer 500 m</label>
+    <div class="legend" id="tipLegend"><strong>Tip colors</strong></div>
+  </div>
+
+  <div id="popup" class="ol-popup" style="display:none;">
+    <a href="#" id="popup-closer" class="ol-popup-closer">✕</a>
+    <div id="popup-content"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/ol@v9.2.4/dist/ol.js"></script>
+  <script>
+    const {
+      Map: OLMap,
+      View,
+      Overlay,
+      layer: { Tile: TileLayer, Vector: VectorLayer },
+      source: { XYZ, Vector: VectorSource },
+      format: { GeoJSON },
+      style: { Style, Stroke, Fill, Circle: CircleStyle },
+      proj,
+      extent
+    } = ol;
+
+    const baseLayer = new TileLayer({
+      source: new XYZ({
+        url: 'https://{a-d}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+        attributions: '© OpenStreetMap contributors © CARTO'
+      }),
+      properties: { name: 'Greyscale basemap' }
+    });
+
+    const popupContainer = document.getElementById('popup');
+    const popupContent = document.getElementById('popup-content');
+    const popupCloser = document.getElementById('popup-closer');
+
+    const popupOverlay = new Overlay({
+      element: popupContainer,
+      autoPan: {
+        animation: { duration: 250 }
+      }
+    });
+
+    popupCloser.onclick = function () {
+      popupOverlay.setPosition(undefined);
+      popupContainer.style.display = 'none';
+      popupCloser.blur();
+      return false;
+    };
+
+    const map = new OLMap({
+      target: 'map',
+      layers: [baseLayer],
+      overlays: [popupOverlay],
+      view: new View({
+        center: proj.fromLonLat([25.0, 46.0]),
+        zoom: 7
+      })
+    });
+
+    const geojsonFormat = new GeoJSON();
+    const tipColorMap = new window.Map();
+    const tipPalette = [
+      '#1f77b4', '#d62728', '#2ca02c', '#9467bd', '#8c564b', '#e377c2',
+      '#7f7f7f', '#bcbd22', '#17becf', '#ff7f0e', '#4e79a7', '#f28e2b',
+      '#e15759', '#76b7b2', '#59a14f', '#edc948', '#b07aa1', '#9c755f',
+      '#bab0ab', '#3366cc', '#dc3912', '#ff9900', '#109618', '#990099'
+    ];
+
+    function getTipColor(tip) {
+      const key = tip || 'Unknown';
+      if (!tipColorMap.has(key)) {
+        const nextColor = tipPalette[tipColorMap.size % tipPalette.length];
+        tipColorMap.set(key, nextColor);
+      }
+      return tipColorMap.get(key);
+    }
+
+    function escapeHtml(str) {
+      return str
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function makePopupHtml(feature) {
+      const props = { ...feature.getProperties() };
+      delete props.geometry;
+
+      const title = props.NUMESIT || props.name || props.Denumire || props.id || 'Feature info';
+      const rows = Object.entries(props)
+        .map(([key, value]) => `
+          <tr>
+            <th>${escapeHtml(String(key))}</th>
+            <td>${escapeHtml(value == null ? '' : String(value))}</td>
+          </tr>
+        `)
+        .join('');
+
+      return `
+        <h4 class="popup-title">${escapeHtml(String(title))}</h4>
+        <table class="popup-table">${rows}</table>
+      `;
+    }
+
+    function fitMapToLayers(layers) {
+      let combinedExtent = null;
+      layers.forEach(layer => {
+        const source = layer.getSource();
+        if (!source) return;
+        const layerExtent = source.getExtent();
+        if (!layerExtent || extent.isEmpty(layerExtent)) return;
+        combinedExtent = combinedExtent ? extent.extend(combinedExtent, layerExtent.slice()) : layerExtent.slice();
+      });
+
+      if (combinedExtent && !extent.isEmpty(combinedExtent)) {
+        map.getView().fit(combinedExtent, { padding: [40, 40, 40, 40], duration: 500, maxZoom: 14 });
+      }
+    }
+
+    function createBufferLayer(features, bufferValue, color) {
+      const matching = features.filter(f => String(f.get('buffer')) === String(bufferValue));
+      return new VectorLayer({
+        source: new VectorSource({ features: matching }),
+        style: new Style({
+          stroke: new Stroke({ color, width: 2.2 }),
+          fill: new Fill({ color: 'rgba(0,0,0,0)' })
+        }),
+        properties: { bufferValue }
+      });
+    }
+
+    function updateTipLegend() {
+      const legend = document.getElementById('tipLegend');
+      const entries = Array.from(tipColorMap.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+      legend.innerHTML = '<strong>Tip colors</strong>' + entries.map(([tip, color]) => `
+        <div class="legend-row">
+          <span class="legend-swatch" style="background:${color}"></span>
+          <span>${escapeHtml(tip)}</span>
+        </div>
+      `).join('');
+    }
+
+    async function loadData() {
+      const [sitesResp, buffersResp, vt19Resp] = await Promise.all([
+        fetch('./situri_limes.geojson'),
+        fetch('./track_buffers.geojson'),
+        fetch('./VT19_1_14-03-2026.geojson')
+      ]);
+
+      if (!sitesResp.ok || !buffersResp.ok || !vt19Resp.ok) {
+        throw new Error('One or more GeoJSON files could not be loaded. Make sure the .geojson files are in the same folder as index.html.');
+      }
+
+      const [sitesJson, buffersJson, vt19Json] = await Promise.all([
+        sitesResp.json(),
+        buffersResp.json(),
+        vt19Resp.json()
+      ]);
+
+      const sitesFeatures = geojsonFormat.readFeatures(sitesJson, {
+        featureProjection: 'EPSG:3857'
+      });
+
+      sitesFeatures.forEach(feature => getTipColor(feature.get('Tip')));
+      updateTipLegend();
+
+      const sitesSource = new VectorSource({
+        features: sitesFeatures
+      });
+
+      const sitesLayer = new VectorLayer({
+        source: sitesSource,
+        style: feature => new Style({
+          image: new CircleStyle({
+            radius: 6,
+            fill: new Fill({ color: getTipColor(feature.get('Tip')) }),
+            stroke: new Stroke({ color: '#ffffff', width: 1.2 })
+          })
+        })
+      });
+
+      const bufferFeatures = geojsonFormat.readFeatures(buffersJson, {
+        featureProjection: 'EPSG:3857'
+      });
+
+      const buffer100Layer = createBufferLayer(bufferFeatures, '100', '#1f77b4');
+      const buffer200Layer = createBufferLayer(bufferFeatures, '200', '#2ca02c');
+      const buffer500Layer = createBufferLayer(bufferFeatures, '500', '#d62728');
+
+      const vt19Source = new VectorSource({
+        features: geojsonFormat.readFeatures(vt19Json, {
+          featureProjection: 'EPSG:3857'
+        })
+      });
+
+      const vt19Layer = new VectorLayer({
+        source: vt19Source,
+        style: new Style({
+          stroke: new Stroke({
+            color: '#ff8c00',
+            width: 3
+          })
+        })
+      });
+
+      map.addLayer(buffer500Layer);
+      map.addLayer(buffer200Layer);
+      map.addLayer(buffer100Layer);
+      map.addLayer(vt19Layer);
+      map.addLayer(sitesLayer);
+
+      document.getElementById('toggleSites').addEventListener('change', e => sitesLayer.setVisible(e.target.checked));
+      document.getElementById('toggleVT19').addEventListener('change', e => vt19Layer.setVisible(e.target.checked));
+      document.getElementById('toggleBuffer100').addEventListener('change', e => buffer100Layer.setVisible(e.target.checked));
+      document.getElementById('toggleBuffer200').addEventListener('change', e => buffer200Layer.setVisible(e.target.checked));
+      document.getElementById('toggleBuffer500').addEventListener('change', e => buffer500Layer.setVisible(e.target.checked));
+
+      map.on('singleclick', function (evt) {
+        const feature = map.forEachFeatureAtPixel(evt.pixel, function (feature) {
+          return feature;
+        });
+
+        if (feature) {
+          popupContent.innerHTML = makePopupHtml(feature);
+          popupContainer.style.display = 'block';
+          popupOverlay.setPosition(evt.coordinate);
+        } else {
+          popupOverlay.setPosition(undefined);
+          popupContainer.style.display = 'none';
+        }
+      });
+
+      map.on('pointermove', function (evt) {
+        if (evt.dragging) return;
+        const hit = map.hasFeatureAtPixel(evt.pixel);
+        map.getTargetElement().style.cursor = hit ? 'pointer' : '';
+      });
+
+      fitMapToLayers([sitesLayer, vt19Layer, buffer100Layer, buffer200Layer, buffer500Layer]);
+    }
+
+    loadData().catch(err => {
+      console.error(err);
+      alert(err.message);
+    });
+  </script>
+</body>
+</html>
